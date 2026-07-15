@@ -111,6 +111,23 @@ int64_t cutlass_mla_get_workspace_size(
     int64_t num_batches,
     int64_t sm_count = 0,
     int64_t num_kv_splits = 1 /* Set to 1 to avoid cuda_graph issue by default. */);
+void fork_attention(
+    torch::Tensor& out,
+    torch::Tensor& softmax_lse,
+    torch::Tensor& split_out,
+    torch::Tensor& split_lse,
+    const torch::Tensor& q,
+    const torch::Tensor& k_cache,
+    const torch::Tensor& v_cache,
+    const torch::Tensor& num_split_per_seq,
+    const std::vector<torch::Tensor>& query_tables,
+    const std::vector<torch::Tensor>& block_tables,
+    const std::vector<torch::Tensor>& num_seqs_per_ctas,
+    const std::vector<torch::Tensor>& cta_ranks,
+    const std::vector<torch::Tensor>& kv_in_ctas,
+    const std::vector<int64_t>& mnw,
+    int64_t max_split_per_seq,
+    double softmax_scale);
 
 /*
  * From csrc/infllm_v2

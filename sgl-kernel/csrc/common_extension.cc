@@ -48,6 +48,12 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "page_table, Tensor! workspace, float sm_scale, int num_kv_splits) -> ()");
   m.impl("cutlass_mla_decode", torch::kCUDA, &cutlass_mla_decode);
   m.def("cutlass_mla_get_workspace_size", &cutlass_mla_get_workspace_size);
+  m.def(
+      "fork_attention(Tensor! out, Tensor! softmax_lse, Tensor! split_out, Tensor! split_lse, Tensor q, Tensor "
+      "k_cache, Tensor v_cache, Tensor num_split_per_seq, Tensor[] query_tables, Tensor[] block_tables, Tensor[] "
+      "num_seqs_per_ctas, Tensor[] cta_ranks, Tensor[] kv_in_ctas, int[] mnw, int max_split_per_seq, float "
+      "softmax_scale) -> ()");
+  m.impl("fork_attention", torch::kCUDA, &fork_attention);
 
   /*
    * From csrc/infllm_v2

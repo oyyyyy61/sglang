@@ -172,6 +172,17 @@ def create_triton_backend(runner):
     return TritonAttnBackend(runner)
 
 
+@register_attention_backend("fork_attn")
+def create_fork_attn_backend(runner):
+    assert not runner.model_config.is_encoder_decoder, (
+        "Cross attention is not supported in the fork_attn attention backend. "
+        "Please use `--attention-backend flashinfer`."
+    )
+    from sglang.srt.layers.attention.fork_attn_backend import ForkAttnBackend
+
+    return ForkAttnBackend(runner)
+
+
 @register_attention_backend("torch_native")
 def create_torch_native_backend(runner):
     from sglang.srt.layers.attention.torch_native_backend import TorchNativeAttnBackend

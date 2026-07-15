@@ -26,6 +26,7 @@ else:
     from sgl_kernel.attention import (
         cutlass_mla_decode,
         cutlass_mla_get_workspace_size,
+        fork_attention,
         merge_state_v2,
     )
     from sgl_kernel.cutlass_moe import (
@@ -178,6 +179,7 @@ else:
         "fast_topk_v2",
         "fp8_blockwise_scaled_grouped_mm",
         "fp8_scaled_mm",
+        "fork_attention",
         "fused_add_rmsnorm",
         "fused_qk_norm_rope",
         "gelu_and_mul",

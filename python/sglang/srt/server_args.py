@@ -194,6 +194,7 @@ SPECULATIVE_DRAFT_MODEL_QUANTIZATION_CHOICES = QUANTIZATION_CHOICES
 ATTENTION_BACKEND_CHOICES = [
     # Common
     "triton",
+    "fork_attn",
     "torch_native",
     "flex_attention",
     "dsa",
@@ -6324,10 +6325,11 @@ class ServerArgs:
         # views; FA3 / FlashInfer do not.
         backends = set(self._resolved_attention_backends())
         backends.discard(None)
-        assert backends <= {"triton"}, (
-            "--enable-page-major-kv-layout requires the Triton attention backend "
+        assert backends <= {"triton", "fork_attn"}, (
+            "--enable-page-major-kv-layout requires the Triton or ForkAttention "
+            "attention backend "
             f"for the full-attention layers; got {sorted(backends)}. Pass "
-            "--attention-backend triton."
+            "--attention-backend triton or --attention-backend fork_attn."
         )
         # The Mamba state is stored in envelope-strided views; only the
         # stride-aware Triton causal-conv / SSM kernels read them correctly.

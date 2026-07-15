@@ -124,7 +124,6 @@ set(SGL_KERNEL_CUDA_FLAGS
     "-O3"
     "-Xcompiler"
     "-fPIC"
-    "-gencode=arch=compute_90,code=sm_90"
     "-std=c++17"
     "-DFLASHINFER_ENABLE_F16"
     "-DCUTE_USE_PACKED_TUPLE=1"
@@ -156,6 +155,20 @@ set(SGL_KERNEL_CUDA_FLAGS
     # "--ptxas-options=--verbose,--register-usage-level=10,--warn-on-local-memory-usage"
 )
 
+set(SGL_KERNEL_CUDA_ARCH_LIST "" CACHE STRING "Override CUDA gencodes, e.g. 89 or 80;89. Empty means use upstream defaults.")
+set(SGL_KERNEL_CUDA_ARCH_LIST_NORMALIZED "")
+if (SGL_KERNEL_CUDA_ARCH_LIST)
+    string(REPLACE "," ";" SGL_KERNEL_CUDA_ARCH_LIST_NORMALIZED "${SGL_KERNEL_CUDA_ARCH_LIST}")
+    message(STATUS "Using explicit SGL_KERNEL_CUDA_ARCH_LIST=${SGL_KERNEL_CUDA_ARCH_LIST_NORMALIZED}")
+endif()
+
+function(sgl_append_cuda_gencodes out_var)
+    foreach(arch IN LISTS SGL_KERNEL_CUDA_ARCH_LIST_NORMALIZED)
+        list(APPEND ${out_var} "-gencode=arch=compute_${arch},code=sm_${arch}")
+    endforeach()
+    set(${out_var} "${${out_var}}" PARENT_SCOPE)
+endfunction()
+
 set(SGL_KERNEL_COMPILE_THREADS 32 CACHE STRING "Set compilation threads, default 32")
 
 # When SGL_KERNEL_COMPILE_THREADS value is less than 1, set it to 1
@@ -178,6 +191,10 @@ option(SGL_KERNEL_ENABLE_FA3_SPARSE_MASK  "Enable FA3 sparse mask kernels" OFF)
 option(SGL_KERNEL_ENABLE_SM90A            "Enable SM90A"            OFF)
 option(SGL_KERNEL_ENABLE_SM100A           "Enable SM100A"           OFF)
 
+if (SGL_KERNEL_CUDA_ARCH_LIST AND NOT SGL_KERNEL_CUDA_ARCH_LIST_NORMALIZED MATCHES "(^|;)90a(;|$)")
+    set(SGL_KERNEL_ENABLE_FA3 OFF CACHE BOOL "Disable FA3 when explicit arch list does not include sm90a" FORCE)
+endif()
+
 if (SGL_KERNEL_ENABLE_BF16)
     list(APPEND SGL_KERNEL_CUDA_FLAGS
         "-DFLASHINFER_ENABLE_BF16"
@@ -192,7 +209,15 @@ if (SGL_KERNEL_ENABLE_FP8)
     )
 endif()
 
-if (ENABLE_BELOW_SM90)
+if (SGL_KERNEL_CUDA_ARCH_LIST)
+    sgl_append_cuda_gencodes(SGL_KERNEL_CUDA_FLAGS)
+else()
+    list(APPEND SGL_KERNEL_CUDA_FLAGS
+        "-gencode=arch=compute_90,code=sm_90"
+    )
+endif()
+
+if (ENABLE_BELOW_SM90 AND NOT SGL_KERNEL_CUDA_ARCH_LIST)
     list(APPEND SGL_KERNEL_CUDA_FLAGS
         "-gencode=arch=compute_80,code=sm_80"
         "-gencode=arch=compute_89,code=sm_89"
@@ -205,7 +230,7 @@ if (ENABLE_BELOW_SM90)
 
 endif()
 
-if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A)
+if (NOT SGL_KERNEL_CUDA_ARCH_LIST AND ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A))
     list(APPEND SGL_KERNEL_CUDA_FLAGS
         "-gencode=arch=compute_100a,code=sm_100a"
         "-gencode=arch=compute_120a,code=sm_120a"
@@ -231,7 +256,7 @@ if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A)
     endif()
 endif()
 
-if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4" AND SGL_KERNEL_ENABLE_FA3)
+if (NOT SGL_KERNEL_CUDA_ARCH_LIST AND "${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4" AND SGL_KERNEL_ENABLE_FA3)
     list(APPEND SGL_KERNEL_CUDA_FLAGS
         "-gencode=arch=compute_90a,code=sm_90a"
     )
@@ -248,6 +273,11 @@ endif()
 set(SOURCES
     "csrc/allreduce/custom_all_reduce.cu"
     "csrc/attention/cutlass_mla_kernel.cu"
+    "csrc/attention/fork/fork_attention.cu"
+    "csrc/attention/fork/fork_fwd_split_hdim128_bf16.cu"
+    "csrc/attention/fork/fork_fwd_split_hdim128_fp16.cu"
+    "csrc/attention/fork/fork_fwd_split_hdim64_bf16.cu"
+    "csrc/attention/fork/fork_fwd_split_hdim64_fp16.cu"
     "csrc/attention/merge_attn_states.cu"
     "csrc/attention/vertical_slash_index.cu"
     "csrc/common_extension.cc"
@@ -319,34 +349,6 @@ set(INCLUDES
     ${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src
 )
 
-# =========================== Common SM90 Build ============================= #
-# Build SM90 library with fast math optimization (same namespace, different directory)
-Python_add_library(common_ops_sm90_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
-
-target_compile_options(common_ops_sm90_build PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:${SGL_KERNEL_CUDA_FLAGS} -use_fast_math>
-)
-target_include_directories(common_ops_sm90_build PRIVATE ${INCLUDES})
-# Set output name and separate build directory to avoid conflicts
-set_target_properties(common_ops_sm90_build PROPERTIES
-    OUTPUT_NAME "common_ops"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm90"
-)
-
-# =========================== Common SM100+ Build ============================= #
-# Build SM100+ library with precise math (same namespace, different directory)
-Python_add_library(common_ops_sm100_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
-
-target_compile_options(common_ops_sm100_build PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:${SGL_KERNEL_CUDA_FLAGS}>
-)
-target_include_directories(common_ops_sm100_build PRIVATE ${INCLUDES})
-# Set output name and separate build directory to avoid conflicts
-set_target_properties(common_ops_sm100_build PROPERTIES
-    OUTPUT_NAME "common_ops"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm100"
-)
-
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(
     COMMAND ${Python3_EXECUTABLE} -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))"
@@ -363,26 +365,70 @@ else()
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 endif()
 
-target_link_libraries(common_ops_sm90_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
-target_link_libraries(common_ops_sm100_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
+set(SGL_KERNEL_COMMON_OPS_TARGETS "")
+if (SGL_KERNEL_CUDA_ARCH_LIST_NORMALIZED STREQUAL "89")
+    message(STATUS "Building only the SM89 common_ops variant for Ada/RTX 4090")
+    Python_add_library(common_ops_sm89_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
+    target_compile_options(common_ops_sm89_build PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:${SGL_KERNEL_CUDA_FLAGS}>
+    )
+    target_include_directories(common_ops_sm89_build PRIVATE ${INCLUDES})
+    set_target_properties(common_ops_sm89_build PROPERTIES
+        OUTPUT_NAME "common_ops"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm89"
+    )
+    list(APPEND SGL_KERNEL_COMMON_OPS_TARGETS common_ops_sm89_build)
+else()
+    # =========================== Common SM90 Build ============================= #
+    # Build SM90 library with fast math optimization (same namespace, different directory)
+    Python_add_library(common_ops_sm90_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
 
-# sparse flash attention
-target_compile_definitions(common_ops_sm90_build PRIVATE
-    FLASHATTENTION_DISABLE_BACKWARD
-    FLASHATTENTION_DISABLE_DROPOUT
-    FLASHATTENTION_DISABLE_UNEVEN_K
-)
-target_compile_definitions(common_ops_sm100_build PRIVATE
-    FLASHATTENTION_DISABLE_BACKWARD
-    FLASHATTENTION_DISABLE_DROPOUT
-    FLASHATTENTION_DISABLE_UNEVEN_K
-)
+    target_compile_options(common_ops_sm90_build PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:${SGL_KERNEL_CUDA_FLAGS} -use_fast_math>
+    )
+    target_include_directories(common_ops_sm90_build PRIVATE ${INCLUDES})
+    # Set output name and separate build directory to avoid conflicts
+    set_target_properties(common_ops_sm90_build PROPERTIES
+        OUTPUT_NAME "common_ops"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm90"
+    )
+    list(APPEND SGL_KERNEL_COMMON_OPS_TARGETS common_ops_sm90_build)
 
-# Install to different subdirectories
-# CMake will find the built libraries in their respective LIBRARY_OUTPUT_DIRECTORY locations
-# and install them to the specified destinations
-install(TARGETS common_ops_sm90_build LIBRARY DESTINATION sgl_kernel/sm90)
-install(TARGETS common_ops_sm100_build LIBRARY DESTINATION sgl_kernel/sm100)
+    # =========================== Common SM100+ Build ============================= #
+    # Build SM100+ library with precise math (same namespace, different directory)
+    Python_add_library(common_ops_sm100_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
+
+    target_compile_options(common_ops_sm100_build PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:${SGL_KERNEL_CUDA_FLAGS}>
+    )
+    target_include_directories(common_ops_sm100_build PRIVATE ${INCLUDES})
+    # Set output name and separate build directory to avoid conflicts
+    set_target_properties(common_ops_sm100_build PROPERTIES
+        OUTPUT_NAME "common_ops"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm100"
+    )
+    list(APPEND SGL_KERNEL_COMMON_OPS_TARGETS common_ops_sm100_build)
+endif()
+
+foreach(common_ops_target IN LISTS SGL_KERNEL_COMMON_OPS_TARGETS)
+    target_link_libraries(${common_ops_target} PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
+    # sparse flash attention
+    target_compile_definitions(${common_ops_target} PRIVATE
+        FLASHATTENTION_DISABLE_BACKWARD
+        FLASHATTENTION_DISABLE_DROPOUT
+        FLASHATTENTION_DISABLE_UNEVEN_K
+    )
+endforeach()
+
+if (TARGET common_ops_sm89_build)
+    install(TARGETS common_ops_sm89_build LIBRARY DESTINATION sgl_kernel/sm89)
+endif()
+if (TARGET common_ops_sm90_build)
+    install(TARGETS common_ops_sm90_build LIBRARY DESTINATION sgl_kernel/sm90)
+endif()
+if (TARGET common_ops_sm100_build)
+    install(TARGETS common_ops_sm100_build LIBRARY DESTINATION sgl_kernel/sm100)
+endif()
 
 # ============================ Optional Install: FA3 ============================= #
 # set flash-attention sources file
@@ -509,11 +555,15 @@ set(INFLLM_FLASH_CUDA_FLAGS
 
 # Arch gencodes: match the original setup.py auto-detection
 # (80 always; 90 for CUDA>=11.8; 120 for CUDA>=12.8).
-if (ENABLE_BELOW_SM90)
+if (SGL_KERNEL_CUDA_ARCH_LIST)
+    sgl_append_cuda_gencodes(INFLLM_FLASH_CUDA_FLAGS)
+elseif (ENABLE_BELOW_SM90)
     list(APPEND INFLLM_FLASH_CUDA_FLAGS "-gencode=arch=compute_80,code=sm_80")
 endif()
-list(APPEND INFLLM_FLASH_CUDA_FLAGS "-gencode=arch=compute_90,code=sm_90")
-if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A)
+if (NOT SGL_KERNEL_CUDA_ARCH_LIST)
+    list(APPEND INFLLM_FLASH_CUDA_FLAGS "-gencode=arch=compute_90,code=sm_90")
+endif()
+if (NOT SGL_KERNEL_CUDA_ARCH_LIST AND ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A))
     list(APPEND INFLLM_FLASH_CUDA_FLAGS "-gencode=arch=compute_120a,code=sm_120a")
 endif()
 

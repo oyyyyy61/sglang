@@ -3,6 +3,7 @@ import glob
 import importlib.util
 import logging
 import os
+import site
 import shutil
 from pathlib import Path
 from typing import List
@@ -56,8 +57,20 @@ def _load_architecture_specific_ops():
     sgl_kernel_dir = Path(__file__).parent
     logger.debug(f"[sgl_kernel] sgl_kernel directory: {sgl_kernel_dir}")
 
+    sgl_kernel_dirs = [sgl_kernel_dir]
+    for site_dir in site.getsitepackages():
+        site_sgl_kernel_dir = Path(site_dir) / "sgl_kernel"
+        if (
+            site_sgl_kernel_dir.exists()
+            and site_sgl_kernel_dir not in sgl_kernel_dirs
+        ):
+            sgl_kernel_dirs.append(site_sgl_kernel_dir)
+
     # Determine which version to load based on GPU architecture
-    if compute_capability == 90:
+    if compute_capability == 89:
+        ops_subdir = "sm89"
+        variant_name = "SM89 (Ada/RTX 4090)"
+    elif compute_capability == 90:
         ops_subdir = "sm90"
         variant_name = "SM90 (Hopper/H100 with fast math optimization)"
     elif compute_capability is not None:
@@ -69,12 +82,17 @@ def _load_architecture_specific_ops():
 
     # Look for the compiled module with any valid extension
 
-    ops_pattern = str(sgl_kernel_dir / ops_subdir / "common_ops.*")
-    raw_matching_files = glob.glob(ops_pattern)
+    ops_patterns = [
+        str(candidate_dir / ops_subdir / "common_ops.*")
+        for candidate_dir in sgl_kernel_dirs
+    ]
+    raw_matching_files = []
+    for ops_pattern in ops_patterns:
+        raw_matching_files.extend(glob.glob(ops_pattern))
     matching_files = _filter_compiled_extensions(raw_matching_files)
 
     logger.debug(f"[sgl_kernel] Attempting to load {variant_name}")
-    logger.debug(f"[sgl_kernel] Looking for library matching pattern: {ops_pattern}")
+    logger.debug(f"[sgl_kernel] Looking for library matching patterns: {ops_patterns}")
     logger.debug(f"[sgl_kernel] Found files: {raw_matching_files}")
     logger.debug(f"[sgl_kernel] Prioritized files: {matching_files}")
 
@@ -108,14 +126,20 @@ def _load_architecture_specific_ops():
             # Continue to fallback
     else:
         logger.debug(
-            f"[sgl_kernel] ✗ Architecture-specific library not found matching pattern: {ops_pattern}"
+            f"[sgl_kernel] ✗ Architecture-specific library not found matching patterns: {ops_patterns}"
         )
 
     # Try alternative directory (in case installation structure differs)
-    alt_pattern = str(sgl_kernel_dir / "common_ops.*")
-    raw_alt_files = glob.glob(alt_pattern)
+    alt_patterns = [
+        str(candidate_dir / "common_ops.*") for candidate_dir in sgl_kernel_dirs
+    ]
+    raw_alt_files = []
+    for alt_pattern in alt_patterns:
+        raw_alt_files.extend(glob.glob(alt_pattern))
     alt_matching_files = _filter_compiled_extensions(raw_alt_files)
-    logger.debug(f"[sgl_kernel] Attempting fallback: looking for pattern {alt_pattern}")
+    logger.debug(
+        f"[sgl_kernel] Attempting fallback: looking for patterns {alt_patterns}"
+    )
     logger.debug(f"[sgl_kernel] Found fallback files: {raw_alt_files}")
     logger.debug(f"[sgl_kernel] Prioritized fallback files: {alt_matching_files}")
 
@@ -144,7 +168,7 @@ def _load_architecture_specific_ops():
             )
     else:
         logger.debug(
-            f"[sgl_kernel] ✗ Fallback library not found matching pattern: {alt_pattern}"
+            f"[sgl_kernel] ✗ Fallback library not found matching patterns: {alt_patterns}"
         )
 
     # Final attempt: try standard Python import (for backward compatibility)
@@ -178,8 +202,8 @@ def _load_architecture_specific_ops():
 [sgl_kernel] CRITICAL: Could not load any common_ops library!
 
 Attempted locations:
-1. Architecture-specific pattern: {ops_pattern} - found files: {matching_files}
-2. Fallback pattern: {alt_pattern} - found files: {alt_matching_files}
+1. Architecture-specific patterns: {ops_patterns} - found files: {matching_files}
+2. Fallback patterns: {alt_patterns} - found files: {alt_matching_files}
 3. Standard Python import: common_ops - failed
 
 GPU Info:
